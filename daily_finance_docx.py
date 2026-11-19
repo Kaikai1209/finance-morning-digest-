@@ -3,8 +3,11 @@ import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+import time
+
 import feedparser
 import requests
+import yfinance as yf  # Lấy giá vàng, dầu, tỷ giá, S&P 500, Bitcoin MIỄN PHÍ từ Yahoo Finance
 from bs4 import BeautifulSoup
 import trafilatura
 from docx import Document
@@ -132,28 +135,125 @@ def collect_news() -> list[dict]:
     return enrich_snippets(all_items, max_articles=18)
 
 
+# ============================================================
+# PHẦN 1: LẤY GIÁ MIỄN PHÍ (thay cho Google Search của Gemini)
+# ============================================================
+
+# Mã (ticker) trên Yahoo Finance của từng sản phẩm
+YF_TICKERS = [
+    ("Vàng thế giới (USD/oz)", "GC=F", "{:,.1f} USD"),
+    ("Dầu thô WTI", "CL=F", "{:,.2f} USD/thùng"),
+    ("Dầu Brent", "BZ=F", "{:,.2f} USD/thùng"),
+    ("Tỷ giá USD/VND", "VND=X", "{:,.0f} VND"),
+    ("S&P 500", "^GSPC", "{:,.2f} điểm"),
+    ("Bitcoin (BTC/USD)", "BTC-USD", "{:,.0f} USD"),
+]
+
+
+def fetch_sjc_price() -> dict:
+    """Thử lấy giá vàng SJC từ web SJC. Lỗi thì ghi 'Đang cập nhật', không làm hỏng cả script."""
+    row = {"product": "Vàng SJC (VN)", "price": "Đang cập nhật", "note": "Xem sjc.com.vn"}
+    try:
+        resp = requests.post(
+            "https://sjc.com.vn/GoldPrice/Services/PriceService.ashx",
+            headers=HEADERS, timeout=15,
+        )
+        data = resp.json().get("data", [])
+        for item in data:
+            name = item.get("TypeName", "")
+            if "SJC" in name and ("1L" in name or "1 lượng" in name.lower() or "10L" in name):
+                buy = item.get("BuyValue")
+                sell = item.get("SellValue")
+                if buy and sell:
+                    row["price"] = f"Mua {buy:,.0f} / Bán {sell:,.0f} VND/lượng"
+                    row["note"] = item.get("BranchName", "SJC")
+                break
+    except Exception as e:
+        print(f"[SJC warning] {e}")
+    return row
+
+
+def fetch_prices() -> list[dict]:
+    """Lấy giá các sản phẩm tài chính, kèm % thay đổi so với phiên trước."""
+    rows = [fetch_sjc_price()]
+    for name, ticker, fmt in YF_TICKERS:
+        row = {"product": name, "price": "Đang cập nhật", "note": ""}
+        try:
+            hist = yf.Ticker(ticker).history(period="5d")["Close"].dropna()
+            if len(hist) >= 1:
+                last = float(hist.iloc[-1])
+                row["price"] = fmt.format(last)
+            if len(hist) >= 2:
+                prev = float(hist.iloc[-2])
+                pct = (last - prev) / prev * 100
+                arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "■")
+                row["note"] = f"{arrow} {pct:+.2f}% so với phiên trước"
+        except Exception as e:
+            print(f"[Price warning] {name}: {e}")
+        rows.append(row)
+    return rows
+
+
+# ============================================================
+# PHẦN 2: GỌI GEMINI (free) — có thử lại + model dự phòng
+# ============================================================
+
+# Thử lần lượt: model nào hết quota thì chuyển sang model sau
+GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
+
+def call_gemini(prompt: str) -> str:
+    for model in GEMINI_MODELS:
+        for attempt in range(3):  # mỗi model thử tối đa 3 lần
+            try:
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    # KHÔNG dùng tools google_search nữa -> không tốn quota Search
+                    config=types.GenerateContentConfig(temperature=0.2),
+                )
+                print(f"[Gemini] OK với model {model}")
+                return resp.text or ""
+            except Exception as e:
+                msg = str(e)
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "503" in msg or "UNAVAILABLE" in msg:
+                    wait = 30 * (attempt + 1)  # chờ 30s, 60s, 90s
+                    print(f"[Gemini] {model} quá tải/hết quota, chờ {wait}s... ({msg[:120]})")
+                    time.sleep(wait)
+                else:
+                    print(f"[Gemini] {model} lỗi khác: {msg[:200]}")
+                    break  # lỗi khác -> chuyển model luôn
+        print(f"[Gemini] Bỏ qua model {model}")
+    return ""  # tất cả đều lỗi -> trả rỗng, script vẫn gửi bản tin dự phòng
+
+
+def fallback_digest(articles: list[dict]) -> str:
+    """Khi Gemini không dùng được: liệt kê tiêu đề tin để vẫn có bản tin gửi đi."""
+    lines = ["Không gọi được AI hôm nay (hết quota free). Danh sách tin nổi bật:"]
+    for a in articles[:15]:
+        lines.append(f"- [{a['source']}] {a['title']} — {a['link']}")
+    return "\n".join(lines)
+
+
 def generate_digest_and_prices(articles: list[dict], now_vn: datetime) -> tuple[str, list[dict], str]:
     news_lines = "\n".join(
         f"- [{a['source']}] {a['title']} | Link: {a['link']} | Tóm tắt: {a['snippet']}"
         for a in articles
     )
 
+    # Giá lấy bằng Python, rồi đưa cho Gemini làm dữ liệu
+    prices_rows = fetch_prices()
+    price_lines = "\n".join(f"- {r['product']}: {r['price']} ({r['note']})" for r in prices_rows)
+
     prompt = f"""
 Thời điểm hiện tại: {now_vn.strftime("%d/%m/%Y %H:%M")} (Giờ Việt Nam, UTC+7).
 
-Bạn là chuyên viên phân tích thị trường tài chính. Hãy sử dụng Google Search để cập nhật giá mới nhất hiện tại của các sản phẩm tài chính chính và tổng hợp bản tin buổi sáng dựa trên dữ liệu tin tức được cung cấp từ Investing.com VN, Vietstock Thế giới, CafeF Tài chính quốc tế.
+Bạn là chuyên viên phân tích thị trường tài chính. Hãy tổng hợp bản tin buổi sáng dựa trên BẢNG GIÁ và dữ liệu tin tức được cung cấp bên dưới (từ Investing.com VN, Vietstock Thế giới, CafeF Tài chính quốc tế). Chỉ dùng số liệu có trong dữ liệu, không tự bịa giá.
+
+Bảng giá mới nhất:
+{price_lines}
 
 Hãy trả về đúng cấu trúc sau (không dùng markdown code block bọc toàn bộ):
-
-===PRICES===
-Sản phẩm | Giá cập nhật | Biến động / Ghi chú
-Vàng SJC (VN) | ... | ...
-Vàng thế giới (XAU/USD) | ... | ...
-Dầu thô WTI | ... | ...
-Dầu Brent | ... | ...
-Tỷ giá USD/VND | ... | ...
-S&P 500 | ... | ...
-Bitcoin (BTC/USD) | ... | ...
 
 ===DIGEST===
 Viết bản tin sáng tiếng Việt rõ ràng, súc tích gồm:
@@ -169,31 +269,13 @@ Dữ liệu tin tức thu thập được:
 {news_lines}
 """
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            tools=[{"google_search": {}}],
-            temperature=0.2,
-        ),
-    )
+    raw = call_gemini(prompt)
 
-    raw = response.text or ""
-
-    prices_rows = []
-    prices_match = re.search(r"===PRICES===\s*(.*?)\s*===DIGEST===", raw, re.DOTALL)
-    if prices_match:
-        for line in prices_match.group(1).strip().splitlines():
-            line = line.strip()
-            if not line or line.startswith("Sản phẩm |") or set(line.replace("|", "").replace("-", "").strip()) == set():
-                continue
-            cols = [c.strip() for c in line.split("|")]
-            if len(cols) >= 2:
-                prices_rows.append({
-                    "product": cols[0],
-                    "price": cols[1],
-                    "note": cols[2] if len(cols) > 2 else "",
-                })
+    if not raw.strip():
+        # Gemini lỗi hết -> vẫn gửi bản tin dự phòng, không crash
+        digest_text = fallback_digest(articles)
+        caption_text = f"Bản tin sáng {now_vn.strftime('%d/%m/%Y')}: AI hết quota, gửi bảng giá + tiêu đề tin."
+        return digest_text, prices_rows, caption_text
 
     digest_match = re.search(r"===DIGEST===\s*(.*?)\s*===TELEGRAM_CAPTION===", raw, re.DOTALL)
     digest_text = digest_match.group(1).strip() if digest_match else raw.strip()
