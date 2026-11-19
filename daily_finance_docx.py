@@ -199,11 +199,30 @@ def fetch_prices() -> list[dict]:
 # ============================================================
 
 # Thử lần lượt: model nào hết quota thì chuyển sang model sau
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+# (Google đã ngừng 2.5 cho tài khoản mới -> dùng 3.5)
+GEMINI_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite"]
+
+
+def get_model_list() -> list[str]:
+    """Danh sách model để thử: model cố định ở trên + các model 'flash' mà API key
+    của bạn đang được phép dùng (tự dò, để lần sau Google đổi tên model không bị lỗi nữa)."""
+    models = list(GEMINI_MODELS)
+    try:
+        for m in client.models.list():
+            name = (m.name or "").replace("models/", "")
+            actions = getattr(m, "supported_actions", None) or []
+            if "flash" in name and "generateContent" in actions \
+                    and not any(x in name for x in ["image", "tts", "audio", "live", "embedding"]) \
+                    and name not in models:
+                models.append(name)
+    except Exception as e:
+        print(f"[Gemini] Không lấy được danh sách model: {e}")
+    print(f"[Gemini] Sẽ thử các model: {models[:6]}")
+    return models[:6]
 
 
 def call_gemini(prompt: str) -> str:
-    for model in GEMINI_MODELS:
+    for model in get_model_list():
         for attempt in range(3):  # mỗi model thử tối đa 3 lần
             try:
                 resp = client.models.generate_content(
@@ -374,21 +393,31 @@ def build_docx(date_str: str, time_str: str, prices_rows: list[dict], digest_tex
     return file_path
 
 
+def check_telegram_response(resp: requests.Response, action: str) -> None:
+    """In rõ LÝ DO Telegram từ chối (thay vì chỉ báo '400 Bad Request')."""
+    if not resp.ok:
+        try:
+            reason = resp.json().get("description", resp.text)
+        except Exception:
+            reason = resp.text
+        raise RuntimeError(f"Telegram {action} lỗi {resp.status_code}: {reason}")
+
+
 def send_telegram_document(file_path: Path, caption: str) -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     with file_path.open("rb") as f:
         resp = requests.post(
             url,
             data={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "caption": caption[:1024],
+                "chat_id": TELEGRAM_CHAT_ID.strip(),
+                "caption": caption[:950],  # Telegram giới hạn 1024 ký tự, chừa dư cho emoji
             },
             files={
                 "document": (file_path.name, f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
             },
             timeout=60,
         )
-        resp.raise_for_status()
+    check_telegram_response(resp, "gửi file")
 
 
 def send_telegram_message(text: str) -> None:
@@ -398,13 +427,13 @@ def send_telegram_message(text: str) -> None:
         resp = requests.post(
             url,
             json={
-                "chat_id": TELEGRAM_CHAT_ID,
+                "chat_id": TELEGRAM_CHAT_ID.strip(),
                 "text": chunk,
                 "disable_web_page_preview": True,
             },
             timeout=30,
         )
-        resp.raise_for_status()
+        check_telegram_response(resp, "gửi tin nhắn")
 
 
 def run() -> None:
