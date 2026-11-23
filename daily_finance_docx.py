@@ -275,14 +275,17 @@ Bảng giá mới nhất:
 Hãy trả về đúng cấu trúc sau (không dùng markdown code block bọc toàn bộ):
 
 ===DIGEST===
-Viết bản tin sáng tiếng Việt rõ ràng, súc tích gồm:
-1. **Tổng quan thị trường & Vĩ mô**
-2. **Chứng khoán, Tiền tệ & Hàng hóa**
-3. **Điểm nhấn cần theo dõi trong ngày**
-Mỗi ý đều nêu rõ thông tin chính, tác động và kèm link nguồn (nếu có trong dữ liệu). Không bịa số liệu; nếu giá nào chưa xác định chính xác thì ghi "Đang cập nhật".
+Viết bản tin sáng bằng tiếng Việt, văn phong báo tài chính, theo đúng hình thức sau:
+- Đoạn mở đầu: 1-2 câu nêu tổng quan phiên Phố Wall / thị trường gần nhất, có xu hướng chính.
+- Đoạn số liệu: nêu rõ mức điểm và % thay đổi của S&P 500, Nasdaq, Dow Jones (lấy từ BẢNG GIÁ), viết thành câu văn liền mạch, không gạch đầu dòng.
+- Các đoạn tiếp theo: mỗi đoạn một chủ đề (công nghệ/AI, chính sách tiền tệ, hàng hóa, tiền tệ, sự kiện doanh nghiệp). Mỗi đoạn 3-5 câu, nêu thông tin chính rồi tác động.
+- Đoạn cuối: một câu nêu điểm cần theo dõi trong ngày.
+- Các cụm từ quan trọng viết trong **dấu sao kép** để nhấn mạnh.
+- Không dùng tiêu đề mục, không dùng bảng. Kèm link nguồn bằng cách ghi tên báo trong ngoặc đơn nếu có.
+Không bịa số liệu; nếu thiếu số liệu nào thì ghi "Đang cập nhật".
 
 ===TELEGRAM_CAPTION===
-Tóm tắt ngắn gọn nhất (dưới 800 ký tự) cho tin nhắn thông báo gửi kèm file Word lúc 7h sáng.
+Tóm tắt ngắn gọn nhất (dưới 800 ký tự) cho tin nhắn thông báo gửi kèm file Word lúc 7h sáng, cùng văn phong trên.
 
 Dữ liệu tin tức thu thập được:
 {news_lines}
