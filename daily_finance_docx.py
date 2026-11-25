@@ -141,12 +141,12 @@ def collect_news() -> list[dict]:
 
 # Mã (ticker) trên Yahoo Finance của từng sản phẩm
 YF_TICKERS = [
-    ("Vàng thế giới (USD/oz)", "GC=F", "{:,.1f} USD"),
-    ("Dầu thô WTI", "CL=F", "{:,.2f} USD/thùng"),
-    ("Dầu Brent", "BZ=F", "{:,.2f} USD/thùng"),
-    ("Tỷ giá USD/VND", "VND=X", "{:,.0f} VND"),
-    ("S&P 500", "^GSPC", "{:,.2f} điểm"),
-    ("Bitcoin (BTC/USD)", "BTC-USD", "{:,.0f} USD"),
+    ("S&P 500", "^GSPC", "{:,.0f} điểm"),
+    ("Nasdaq Composite", "^IXIC", "{:,.0f} điểm"),
+    ("Dow Jones", "^DJI", "{:,.0f} điểm"),
+    ("Nvidia", "NVDA", "{:,.2f} USD"),
+    ("AMD", "AMD", "{:,.2f} USD"),
+    ("Micron", "MU", "{:,.2f} USD"),
 ]
 
 
@@ -175,7 +175,7 @@ def fetch_sjc_price() -> dict:
 
 def fetch_prices() -> list[dict]:
     """Lấy giá các sản phẩm tài chính, kèm % thay đổi so với phiên trước."""
-    rows = [fetch_sjc_price()]
+    rows = []
     for name, ticker, fmt in YF_TICKERS:
         row = {"product": name, "price": "Đang cập nhật", "note": ""}
         try:
@@ -267,25 +267,30 @@ def generate_digest_and_prices(articles: list[dict], now_vn: datetime) -> tuple[
     prompt = f"""
 Thời điểm hiện tại: {now_vn.strftime("%d/%m/%Y %H:%M")} (Giờ Việt Nam, UTC+7).
 
-Bạn là chuyên viên phân tích thị trường tài chính. Hãy tổng hợp bản tin buổi sáng dựa trên BẢNG GIÁ và dữ liệu tin tức được cung cấp bên dưới (từ Investing.com VN, Vietstock Thế giới, CafeF Tài chính quốc tế). Chỉ dùng số liệu có trong dữ liệu, không tự bịa giá.
+Bạn là biên kịch viết lời thoại cho MC chương trình tài chính buổi sáng. Lời viết để MC đọc trực tiếp trên sóng, theo đúng giọng văn nói sau:
+- Mở đầu bằng câu chào, ví dụ: "Vâng thưa quý vị, mở đầu phiên buổi sáng ngày {now_vn.strftime("%d/%m")} của chúng ta hôm nay, cùng bàn về tin tức thị trường tài chính Hoa Kỳ."
+- Đoạn 1: nêu xu hướng chính của thị trường Mỹ trong phiên gần nhất.
+- Đoạn 2: đọc số liệu các chỉ số theo kiểu "Nasdaq Composite giảm 1,48% còn 23.733 điểm", lấy số từ BẢNG GIÁ.
+- Đoạn 3: nêu các cổ phiếu biến động mạnh và lý do ngắn gọn, dựa trên tin tức được cung cấp.
+- Đoạn 4: sự kiện sắp tới (ví dụ dữ liệu lạm phát, cuộc họp Fed) và lý do thị trường quan tâm, chỉ dựa trên tin tức được cung cấp.
+- Kết thúc bằng một dòng bắt đầu bằng "MC hỏi:", là một câu hỏi mở cho khán giả.
+
+Quy tắc:
+- Câu ngắn, dễ đọc to. Viết số theo kiểu Việt Nam: 1,48%; 23.733 điểm.
+- Chỉ dùng số có trong BẢNG GIÁ và tin tức, không tự bịa, không tự tính lại.
+- Không dùng markdown, không gạch đầu dòng, không tiêu đề mục, không bảng, không link, không in đậm.
+- Độ dài khoảng 250-350 chữ.
+
+Hãy trả về đúng cấu trúc sau:
+
+===DIGEST===
+(lời thoại cho MC theo các đoạn trên)
+
+===TELEGRAM_CAPTION===
+Tóm tắt ngắn gọn (dưới 800 ký tự) để gửi kèm file Word lúc 7h sáng, cùng giọng văn trên.
 
 Bảng giá mới nhất:
 {price_lines}
-
-Hãy trả về đúng cấu trúc sau (không dùng markdown code block bọc toàn bộ):
-
-===DIGEST===
-Viết bản tin sáng bằng tiếng Việt, văn phong báo tài chính, theo đúng hình thức sau:
-- Đoạn mở đầu: 1-2 câu nêu tổng quan phiên Phố Wall / thị trường gần nhất, có xu hướng chính.
-- Đoạn số liệu: nêu rõ mức điểm và % thay đổi của S&P 500, Nasdaq, Dow Jones (lấy từ BẢNG GIÁ), viết thành câu văn liền mạch, không gạch đầu dòng.
-- Các đoạn tiếp theo: mỗi đoạn một chủ đề (công nghệ/AI, chính sách tiền tệ, hàng hóa, tiền tệ, sự kiện doanh nghiệp). Mỗi đoạn 3-5 câu, nêu thông tin chính rồi tác động.
-- Đoạn cuối: một câu nêu điểm cần theo dõi trong ngày.
-- Các cụm từ quan trọng viết trong **dấu sao kép** để nhấn mạnh.
-- Không dùng tiêu đề mục, không dùng bảng. Kèm link nguồn bằng cách ghi tên báo trong ngoặc đơn nếu có.
-Không bịa số liệu; nếu thiếu số liệu nào thì ghi "Đang cập nhật".
-
-===TELEGRAM_CAPTION===
-Tóm tắt ngắn gọn nhất (dưới 800 ký tự) cho tin nhắn thông báo gửi kèm file Word lúc 7h sáng, cùng văn phong trên.
 
 Dữ liệu tin tức thu thập được:
 {news_lines}
@@ -361,35 +366,7 @@ def build_docx(date_str: str, time_str: str, prices_rows: list[dict], digest_tex
     meta_run.font.size = Pt(9.5)
     meta_run.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
 
-    doc.add_heading("1. Bảng cập nhật giá sản phẩm tài chính", level=2)
 
-    table = doc.add_table(rows=1, cols=3)
-    table.style = "Table Grid"
-    hdr_cells = table.rows[0].cells
-    hdr_titles = ["Sản phẩm tài chính", "Giá cập nhật", "Biến động / Ghi chú"]
-    for idx, h_text in enumerate(hdr_titles):
-        hdr_cells[idx].text = h_text
-        for run in hdr_cells[idx].paragraphs[0].runs:
-            run.bold = True
-            run.font.size = Pt(10)
-
-    if prices_rows:
-        for row in prices_rows:
-            cells = table.add_row().cells
-            cells[0].text = row["product"]
-            cells[1].text = row["price"]
-            cells[2].text = row["note"]
-            for c in cells:
-                for run in c.paragraphs[0].runs:
-                    run.font.size = Pt(10)
-    else:
-        cells = table.add_row().cells
-        cells[0].text = "Tổng hợp giá"
-        cells[1].text = "Xem chi tiết trong nội dung bên dưới"
-        cells[2].text = ""
-
-    doc.add_paragraph("")
-    doc.add_heading("2. Tổng hợp tin tức nổi bật", level=2)
     add_formatted_markdown_lines(doc, digest_text)
 
     doc.save(file_path)
