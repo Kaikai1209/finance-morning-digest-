@@ -26,6 +26,10 @@ TARGET_PAGES = [
     ("Investing.com VN", "https://vn.investing.com/news", "https://vn.investing.com/rss/news.rss"),
     ("Vietstock Thế giới", "https://vietstock.vn/the-gioi.htm", "https://vietstock.vn/736/the-gioi.rss"),
     ("CafeF Tài chính quốc tế", "https://cafef.vn/tai-chinh-quoc-te.chn", "https://cafef.vn/tai-chinh-quoc-te.rss"),
+    # Nguồn tiếng Anh, cập nhật liên tục mỗi ngày (page_url rỗng = chỉ dùng RSS)
+    ("BBC Business", "", "https://feeds.bbci.co.uk/news/business/rss.xml"),
+    ("CNBC Markets", "", "https://www.cnbc.com/id/10000664/device/rss/rss.html"),
+    ("Yahoo Finance", "", "https://finance.yahoo.com/news/rssindex"),
 ]
 
 HEADERS = {
@@ -40,7 +44,7 @@ HEADERS = {
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
-def fetch_rss_items(rss_url: str, source_name: str, limit: int = 8) -> list[dict]:
+def fetch_rss_items(rss_url: str, source_name: str, limit: int = 15) -> list[dict]:
     items = []
     try:
         resp = requests.get(rss_url, headers=HEADERS, timeout=15)
@@ -50,12 +54,16 @@ def fetch_rss_items(rss_url: str, source_name: str, limit: int = 8) -> list[dict
                 title = (entry.get("title") or "").strip()
                 link = (entry.get("link") or "").strip()
                 summary = re.sub(r"<[^>]+>", " ", entry.get("summary") or "").strip()
+                # Thời điểm đăng tin (UTC) để lọc tin mới
+                t = entry.get("published_parsed") or entry.get("updated_parsed")
+                published = datetime(*t[:6], tzinfo=timezone.utc) if t else None
                 if title and link:
                     items.append({
                         "source": source_name,
                         "title": title,
                         "link": link,
                         "snippet": re.sub(r"\s+", " ", summary)[:300],
+                        "published": published,
                     })
     except Exception as e:
         print(f"[RSS warning] {source_name}: {e}")
@@ -65,6 +73,8 @@ def fetch_rss_items(rss_url: str, source_name: str, limit: int = 8) -> list[dict
 def fetch_html_links(page_url: str, source_name: str, limit: int = 10) -> list[dict]:
     items = []
     seen_urls = set()
+    if not page_url:
+        return items
     try:
         resp = requests.get(page_url, headers=HEADERS, timeout=20)
         resp.raise_for_status()
@@ -118,21 +128,26 @@ def enrich_snippets(items: list[dict], max_articles: int = 18) -> list[dict]:
 def collect_news() -> list[dict]:
     all_items = []
     for source_name, page_url, rss_url in TARGET_PAGES:
-        rss_items = fetch_rss_items(rss_url, source_name, limit=8)
+        rss_items = fetch_rss_items(rss_url, source_name, limit=15)
         html_items = fetch_html_links(page_url, source_name, limit=8)
-
-        combined = []
         seen_links = set()
         for it in rss_items + html_items:
             if it["link"] not in seen_links:
                 seen_links.add(it["link"])
-                combined.append(it)
-            if len(combined) >= 10:
-                break
+                all_items.append(it)
 
-        all_items.extend(combined)
+    # Tin có ngày đăng lên trước, mới nhất đứng đầu
+    all_items.sort(key=lambda x: x.get("published") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
-    return enrich_snippets(all_items, max_articles=18)
+    # Chỉ giữ tin trong 36 giờ gần nhất; nếu quá ít thì giữ tất cả để không ra bản tin trống
+    now_utc = datetime.now(timezone.utc)
+    fresh = [i for i in all_items if i.get("published") and now_utc - i["published"] <= timedelta(hours=36)]
+    items = fresh if len(fresh) >= 5 else all_items
+    print(f"[News] Tổng {len(all_items)} tin, tin trong 36h: {len(fresh)}, dùng {len(items)} tin")
+    for i in items[:5]:
+        print(f"  - {i.get('published')} | {i['source']} | {i['title'][:80]}")
+
+    return enrich_snippets(items, max_articles=25)
 
 
 # ============================================================
@@ -256,7 +271,7 @@ def fallback_digest(articles: list[dict]) -> str:
 
 def generate_digest_and_prices(articles: list[dict], now_vn: datetime) -> tuple[str, list[dict], str]:
     news_lines = "\n".join(
-        f"- [{a['source']}] {a['title']} | Link: {a['link']} | Tóm tắt: {a['snippet']}"
+        f"- [{a['source']}] {a['title']} | Đăng: {a['published'].astimezone(VN_TZ).strftime('%d/%m %H:%M') if a.get('published') else 'không rõ'} | Link: {a['link']} | Tóm tắt: {a['snippet']}"
         for a in articles
     )
 
@@ -278,6 +293,7 @@ Bạn là biên kịch viết lời thoại cho MC chương trình tài chính b
 Quy tắc:
 - Câu ngắn, dễ đọc to. Viết số theo kiểu Việt Nam: 1,48%; 23.733 điểm.
 - Chỉ dùng số có trong BẢNG GIÁ và tin tức, không tự bịa, không tự tính lại.
+- Chỉ viết về các tin trong danh sách tin tức, ưu tiên tin đăng mới nhất. Không nhắc lại tin cũ hơn 1 ngày.
 - Không dùng markdown, không gạch đầu dòng, không tiêu đề mục, không bảng, không link, không in đậm.
 - Độ dài khoảng 250-350 chữ.
 
